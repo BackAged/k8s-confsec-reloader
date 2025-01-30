@@ -1,0 +1,7 @@
+## Append samples you want in your CSV to this file as resources ##
+resources:
+- reload_v1alpha1_configmapwatcher.yaml
+- reload_v1alpha1_secretwatcher.yaml
+- core_v1_configmap.yaml
+- core_v1_secret.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
