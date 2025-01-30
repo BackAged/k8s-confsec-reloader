@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-config
+  namespace: default
+  annotations:
+    k8s-confsec-reloader.io/auto: "true"
+    k8s-confsec-reloader.io/keys-to-watch: "DATABASE_URL,API_KEY"
+data:
+  DATABASE_URL: "postgres://localhost:5432/mydb"
+  API_KEY: "my-super-secret-key"
+  UNUSED_KEY: "this-should-not-trigger-reload"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+        - name: test-container
+          image: nginx
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: my-config
+                  key: DATABASE_URL
+            - name: API_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: my-config
+                  key: API_KEY
