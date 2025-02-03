@@ -17,7 +17,7 @@ func generateFNVHash(data string) string {
 	return fmt.Sprintf("%x", hasher.Sum64())
 }
 
-// GetConfigMapHash computes a stable hash for ConfigMap data (optimized)
+// GetConfigMapHash computes a stable hash for ConfigMap data
 func GetConfigMapHash(configmap *corev1.ConfigMap, keysToWatch []string) string {
 	var values []string
 
@@ -41,6 +41,29 @@ func GetConfigMapHash(configmap *corev1.ConfigMap, keysToWatch []string) string 
 	}
 
 	// Sort to ensure consistent ordering (maps are unordered)
+	sort.Strings(values)
+
+	return generateFNVHash(strings.Join(values, ";"))
+}
+
+// GetSecretHash computes a stable hash for Secret data
+func GetSecretHash(secret *corev1.Secret, keysToWatch []string) string {
+	var values []string
+
+	// Filter and process only specified keys (if provided)
+	if len(keysToWatch) > 0 {
+		for _, key := range keysToWatch {
+			if val, exists := secret.Data[key]; exists {
+				values = append(values, key+"="+base64.StdEncoding.EncodeToString(val))
+			}
+		}
+	} else {
+		for k, v := range secret.Data {
+			values = append(values, k+"="+base64.StdEncoding.EncodeToString(v))
+		}
+	}
+
+	// Sort to ensure consistent ordering
 	sort.Strings(values)
 
 	return generateFNVHash(strings.Join(values, ";"))

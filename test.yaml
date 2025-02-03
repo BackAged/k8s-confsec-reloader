@@ -4,7 +4,7 @@ metadata:
   name: my-config
   namespace: default
   annotations:
-    k8s-confsec-reloader.io/auto: "true"
+    k8s-confsec-reloader.io/watch: "true"
     k8s-confsec-reloader.io/keys-to-watch: "DATABASE_URL,API_KEY"
 data:
   DATABASE_URL: "postgres://localhost:5432/mydb"

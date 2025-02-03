@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"strings"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,7 +45,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		ctx,
 		deployments,
 		client.InNamespace(req.Namespace),
-		client.MatchingFields{IndexKey: configMap.Name},
+		client.MatchingFields{ConfigMapIndexKey: configMap.Name},
 	); err != nil {
 		log.Error(err, "Failed to list Deployments")
 		return ctrl.Result{}, err
@@ -55,7 +53,7 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Trigger a reload for each Deployment
 	for _, deployment := range deployments.Items {
-		if err := r.triggerReload(ctx, &deployment); err != nil {
+		if err := r.TriggerDeploymentReload(ctx, &deployment); err != nil {
 			log.Error(err, "Failed to trigger reload", "deployment", deployment.Name)
 			return ctrl.Result{}, err
 		}
@@ -63,19 +61,6 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// triggerReload updates the Deployment's pod template to trigger a update
-func (r *ConfigMapReconciler) triggerReload(ctx context.Context, deployment *appsv1.Deployment) error {
-	patch := client.MergeFrom(deployment.DeepCopy())
-
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = make(map[string]string)
-	}
-	deployment.Spec.Template.Annotations[ReloadTimestampAnnotation] = time.Now().Format(time.RFC3339)
-
-	// Use Patch instead of Update
-	return r.Client.Patch(ctx, deployment, patch)
 }
 
 // indexConfigMapRefs indexes Deployments by the ConfigMaps they reference
@@ -159,31 +144,13 @@ func getConfigMapFilter() predicate.Predicate {
 	}
 }
 
-// parseKeysToWatch extracts the list of keys to watch from annotations
-func parseKeysToWatch(cm *corev1.ConfigMap) []string {
-	if val, exists := cm.Annotations[ConfigMapKeyWatchAnnotation]; exists {
-		return strings.Split(val, ",")
-	}
-
-	return nil
-}
-
-// parseWatch extracts watch annotations
-func parseWatch(cm *corev1.ConfigMap) bool {
-	if val, exists := cm.Annotations[ConfigMapWatchAnnotation]; exists {
-		return val == "true"
-	}
-
-	return true
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Index Deployments by referenced ConfigMaps
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&appsv1.Deployment{},
-		IndexKey,
+		ConfigMapIndexKey,
 		indexConfigMapRefs,
 	); err != nil {
 		return err
