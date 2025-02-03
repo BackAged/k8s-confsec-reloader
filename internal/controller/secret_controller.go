@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -10,7 +9,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // SecretReconciler reconciles a Secret object
@@ -44,7 +45,7 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		ctx,
 		deployments,
 		client.InNamespace(req.Namespace),
-		client.MatchingFields{"spec.template.spec.secretRefs": secret.Name},
+		client.MatchingFields{SecretIndexKey: secret.Name},
 	); err != nil {
 		log.Error(err, "Failed to list Deployments")
 		return ctrl.Result{}, err
@@ -52,7 +53,7 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Trigger a reload for each Deployment
 	for _, deployment := range deployments.Items {
-		if err := r.triggerReload(ctx, &deployment); err != nil {
+		if err := r.TriggerDeploymentReload(ctx, &deployment); err != nil {
 			log.Error(err, "Failed to trigger reload", "deployment", deployment.Name)
 			return ctrl.Result{}, err
 		}
@@ -60,32 +61,6 @@ func (r *SecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{}, nil
-}
-
-// triggerReload updates the Deployment's pod template to trigger a rolling update
-func (r *SecretReconciler) triggerReload(ctx context.Context, deployment *appsv1.Deployment) error {
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = make(map[string]string)
-	}
-	deployment.Spec.Template.Annotations["myoperator.com/reload-timestamp"] = time.Now().String()
-	return r.Update(ctx, deployment)
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Index Deployments by referenced Secrets
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&appsv1.Deployment{},
-		"spec.template.spec.secretRefs",
-		indexSecretRefs,
-	); err != nil {
-		return err
-	}
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Secret{}).
-		Complete(r)
 }
 
 // indexSecretRefs indexes Deployments by the Secrets they reference
@@ -128,11 +103,63 @@ func indexSecretRefs(obj client.Object) []string {
 		}
 	}
 
-	// Convert set to slice
 	secrets := make([]string, 0, len(secretSet))
 	for secret := range secretSet {
 		secrets = append(secrets, secret)
 	}
 
 	return secrets
+}
+
+// process events based on following
+// - secret data is changed
+// - secret tracking is not disabled
+func getSecretFilter() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(event event.CreateEvent) bool {
+			return false // Ignore create events
+		},
+		UpdateFunc: func(event event.UpdateEvent) bool {
+			oldSecret, okOld := event.ObjectOld.(*corev1.Secret)
+			newSecret, okNew := event.ObjectNew.(*corev1.Secret)
+
+			if !okOld || !okNew {
+				return false
+			}
+
+			if !parseWatch(newSecret) {
+				return false
+			}
+
+			// Get keys to watch (if specified)
+			keysToWatch := parseKeysToWatch(newSecret)
+
+			// Compare hashes of the old and new Secret data
+			oldHash := GetSecretHash(oldSecret, keysToWatch)
+			newHash := GetSecretHash(newSecret, keysToWatch)
+
+			return oldHash != newHash
+		},
+		DeleteFunc: func(event event.DeleteEvent) bool {
+			return false // Ignore delete events
+		},
+	}
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *SecretReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index Deployments by referenced Secrets
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&appsv1.Deployment{},
+		SecretIndexKey,
+		indexSecretRefs,
+	); err != nil {
+		return err
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&corev1.Secret{}).
+		WithEventFilter(getSecretFilter()).
+		Complete(r)
 }
